@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Continuous Audio Classification</title>
+  <!-- Include Chart.js from a CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2rem;
+      text-align: center;
+    }
+    .spectrogram {
+      max-width: 100%;
+      height: auto;
+      margin-top: 1rem;
+    }
+    .message {
+      color: #555;
+      font-size: 1.2rem;
+      margin: 1rem 0;
+    }
+    button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 0.8rem 1.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+      border-radius: 4px;
+      margin: 0.5rem;
+    }
+    button:hover {
+      background-color: #3367d6;
+    }
+    .sensor {
+      font-size: 1rem;
+      margin: 1rem;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      display: inline-block;
+    }
+    #chartContainer {
+      max-width: 600px;
+      margin: auto;
+    }
+    #sensorStatus {
+      font-weight: bold;
+      margin: 1rem 0;
+      font-size: 1.1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Continuous Audio Classification</h1>
+  
+  <!-- Sensor Value Display -->
+  <div class="sensor">
+    Current SPL: <span id="sensorReading">--</span> dB
+  </div>
+  
+  <!-- Sensor Status Display -->
+  <div id="sensorStatus">Area is CALM</div>
+  
+  <!-- Live Chart Container -->
+  <div id="chartContainer">
+    <canvas id="dbChart"></canvas>
+  </div>
+  
+  <!-- Prediction Results -->
+  <div id="status" class="message">
+    Click "Start Prediction" to begin checking the environment.
+  </div>
+  <div id="result">
+    <!-- The predicted label and image will be inserted here -->
+  </div>
+  
+  <!-- Prediction Control Buttons -->
+  <button id="startPredictionButton">Start Prediction</button>
+  <button id="stopPredictionButton" style="display:none;">Stop Prediction</button>
+  
+  <script>
+    // Create a Chart.js line chart for SPL values.
+    const ctx = document.getElementById('dbChart').getContext('2d');
+    const maxDataPoints = 50; // how many points to display
+    const dbChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [], // timestamps or sample indexes
+        datasets: [{
+          label: 'SPL (dB)',
+          data: [],
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.2,
+          fill: false
+        }]
+      },
+      options: {
+        animation: false,
+        scales: {
+          x: {
+            title: { display: true, text: 'Time (s)' }
+          },
+          y: {
+            suggestedMin: 30,
+            suggestedMax: 80,
+            title: { display: true, text: 'SPL (dB)' }
+          }
+        }
+      }
+    });
+    
+    // Global variable to track prediction polling
+    let predictionIntervalId = null;
+    
+    // Start sensor polling immediately (every 200ms)
+    setInterval(pollSensor, 200);
+    
+    // Use performance.now() as a time reference (in seconds)
+    const startTime = performance.now();
+    
+    // Poll sensor endpoint to update numeric SPL display, status, and chart.
+    function pollSensor() {
+      fetch('/sensor')
+        .then(response => response.json())
+        .then(data => {
+          // Update the numeric SPL display
+          const spl = data.current_spl;
+          document.getElementById('sensorReading').textContent = spl.toFixed(1);
+          
+          // Update the sensor status: "Activity Detected" if above threshold (57 dB)
+          const sensorStatusElem = document.getElementById('sensorStatus');
+          if (spl > 57) {
+            sensorStatusElem.textContent = "Activity Detected";
+            sensorStatusElem.style.color = "red";
+          } else {
+            sensorStatusElem.textContent = "Area is CALM";
+            sensorStatusElem.style.color = "green";
+          }
+          
+          // Get current time (in seconds relative to page load)
+          const currentTime = ((performance.now() - startTime) / 1000).toFixed(1);
+          
+          // Add the new data point to the chart
+          dbChart.data.labels.push(currentTime);
+          dbChart.data.datasets[0].data.push(spl);
+          
+          // Remove old data if we exceed the maximum
+          if (dbChart.data.labels.length > maxDataPoints) {
+            dbChart.data.labels.shift();
+            dbChart.data.datasets[0].data.shift();
+          }
+          
+          dbChart.update();
+        })
+        .catch(err => {
+          console.error('Error fetching sensor data:', err);
+        });
+    }
+    
+    // Update the prediction result on the page.
+    function updateResult(data) {
+      const resultDiv = document.getElementById('result');
+      if (data.active) {
+        resultDiv.innerHTML = `
+          <h2>Predicted Label: ${data.predicted_label}</h2>
+          ${data.image_url ? `<img class="spectrogram" src="${data.image_url}" alt="Spectrogram Image">` : ''}
+        `;
+      } else {
+        resultDiv.innerHTML = `<h2>Listening for Activity</h2>`;
+      }
+    }
+    
+    // Poll prediction endpoint (every 5 seconds) for predictions.
+    function pollPrediction() {
+      fetch('/predict')
+        .then(response => response.json())
+        .then(data => {
+          updateResult(data);
+        })
+        .catch(err => {
+          console.error('Error fetching prediction:', err);
+        });
+    }
+    
+    // Start/stop prediction polling; sensor polling continues independently.
+    document.getElementById('startPredictionButton').addEventListener('click', function() {
+      document.getElementById('status').textContent = "Monitoring environment for predictions...";
+      // Start prediction polling every 5 seconds.
+      predictionIntervalId = setInterval(pollPrediction, 5000);
+      // Immediately poll once for prediction.
+      pollPrediction();
+      // Toggle button visibility.
+      document.getElementById('startPredictionButton').style.display = "none";
+      document.getElementById('stopPredictionButton').style.display = "inline-block";
+    });
+    
+    document.getElementById('stopPredictionButton').addEventListener('click', function() {
+      clearInterval(predictionIntervalId);
+      document.getElementById('status').textContent = "Prediction monitoring stopped. Sensor data continues to update.";
+      // Toggle button visibility.
+      document.getElementById('startPredictionButton').style.display = "inline-block";
+      document.getElementById('stopPredictionButton').style.display = "none";
+    });
+  </script>
+</body>
+</html>
