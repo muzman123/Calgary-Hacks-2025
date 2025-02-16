@@ -34,3 +34,7 @@ Retrain or Update the Model
 
 In src/scripts/, run ```train_model.py``` (adjusting dataset paths as needed).
 Replace the old .h5 file in src/web/ with the newly trained version.
+
+## Attributions
+
+- ESC-50: Dataset for Environmental Sound Classification used for training audio captioning model: https://github.com/karolpiczak/ESC-50
